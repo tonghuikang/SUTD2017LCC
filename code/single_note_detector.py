@@ -6,7 +6,6 @@ Created on May 23 2014
 @author: florian
 # librosa: https://librosa.github.io/librosa/generated/librosa.feature.chroma_cqt.html#librosa.feature.chroma_cqt
 """
-
 import sys
 import threading
 import atexit
@@ -22,6 +21,7 @@ from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as Navigatio
 # variables in the program (not necessarily easily changed):
 # chunksize - elaborated in class MicrophoneRecorder
 # noise (for energy) - determines the onset detection desensitivity
+# TODO: calculate percentage of area under graph due to the sound from ffreq
 # threshold crossing point - determines the onset detection sensitivity
 # lower threshold of spectrum - muting everything below the frequency
 
@@ -91,17 +91,21 @@ class LiveFFTWidget(QtGui.QWidget):
         self.chunksize = 2048
         self.tempo_res = 32  # r_coeff resolution, needs to be a factor of chunksize
         self.iteration = 0  # for counting, if needed
-        self.noise = np.round(100000*np.random.randn(self.chunksize))  # to desensitise onset detection
+        self.noise = np.round(200000*np.random.randn(self.chunksize))  # to desensitise onset detection
         self.sampling_rate = 44100
         self.notes_dict = {0: 'C', 1: 'C#', 2: 'D', 3: 'D#', 4: 'E', 5: 'F',
                            6: 'F#', 7: 'G', 8: 'G#', 9: 'A', 10: 'A#', 11: 'B'}
 
         # holding variables
-        self.signal_frame = [0]*self.chunksize          # past signal chunk
-        self.signal_frame_p2 = [0] * self.chunksize     # past past signal chunk
-        self.energy_frame = [0]*self.chunksize          # past energy chunk
-        self.rcoeff_frame = [0.0]*int(self.tempo_res)   # current rcoeff chunk - should change
-        self.rcoeff_frame_p = [0.0] * int(self.tempo_res)  # past roceff chunk
+        self.signal_frame_pp0 = [0] * self.chunksize          # past signal chunk
+        self.signal_frame_pp1 = [0] * self.chunksize
+        self.signal_frame_pp2 = [0] * self.chunksize     # past past signal chunk
+        self.energy_frame_pp0 = [0] * self.chunksize          # past energy chunk
+        self.energy_frame_pp1 = [0] * self.chunksize  # past energy chunk
+        self.energy_frame_pp2 = [0] * self.chunksize  # past energy chunk
+        self.rcoeff_frame_pp0 = [0.0] * int(self.tempo_res)   # current rcoeff chunk - should change
+        self.rcoeff_frame_pp1 = [0.0] * int(self.tempo_res)  # past roceff chunk
+        self.note_detected = False
 
         # customize the UI
         self.initUI()
@@ -168,7 +172,7 @@ class LiveFFTWidget(QtGui.QWidget):
         self.mic = mic
 
         # computes the parameters that will be used during plotting
-        self.freq_vect = np.fft.rfftfreq(mic.chunksize, 1./mic.rate)
+        self.freq_vect = np.fft.rfftfreq(mic.chunksize, 1./mic.rate)  # original
         self.time_vect = np.arange(mic.chunksize, dtype=np.float32) / mic.rate * 1000
         # QUESTION: Why 1000? - convert from seconds to milliseconds?
         # these are axes that we will plot against
@@ -183,22 +187,24 @@ class LiveFFTWidget(QtGui.QWidget):
         """
         # top plot: currently to show energy
         self.ax_top = self.main_figure.figure.add_subplot(211)
-        self.ax_top.set_ylim(-32768*100, 32768*100)
+        self.ax_top.set_ylim(-32768, 32768)  # original
+        self.ax_top.set_ylim(-32768 * 100, 32768 * 100)  # to show energy
         self.ax_top.set_xlim(0, self.time_vect.max())
         self.ax_top.set_xlabel(u'time (ms)', fontsize=6)
 
         # bottom plot: currently to show spectrum
         self.ax_bottom = self.main_figure.figure.add_subplot(212)
         self.ax_bottom.set_ylim(0, 1)
-        self.ax_bottom.set_xlim(0, self.freq_vect.max())
+        # self.ax_bottom.set_xlim(0, self.freq_vect.max()) original
+        self.ax_bottom.set_xlim(0, 5000.)
         self.ax_bottom.set_xlabel(u'frequency (Hz)', fontsize=6)
 
         # line objects
         self.line_top, = self.ax_top.plot(self.time_vect,
-                                          np.ones_like(self.time_vect))
+                                          np.ones_like(self.time_vect), lw=0.5)
 
         self.line_bottom, = self.ax_bottom.plot(self.freq_vect,
-                                                np.ones_like(self.freq_vect))
+                                                np.ones_like(self.freq_vect), lw=0.5)
 
         self.pitch_line, = self.ax_bottom.plot((self.freq_vect[self.freq_vect.size / 2],
                                                 self.freq_vect[self.freq_vect.size / 2]),
@@ -223,7 +229,7 @@ class LiveFFTWidget(QtGui.QWidget):
             if len(signal_frames) > 1:
                 print str(len(signal_frames) - 1) + " frame lost"
                 # indicate number of frames lost - should not have any
-            current_frame = signal_frames[-1]  # keeps only the last frame
+            self.signal_frame_pp0 = signal_frames[-1]  # keeps only the last frame
 
             # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
             # " energy calculations"  # 0.01s
@@ -232,11 +238,11 @@ class LiveFFTWidget(QtGui.QWidget):
             # numpy operations are more efficient than using python loops
             # the size of the rectangular window is one chunksize
             # convolution can be considered
-            energy = np.full(self.chunksize, sum(np.absolute(current_frame)), dtype="int32")
-            to_cumsum = np.add(np.absolute(current_frame), -np.absolute(self.signal_frame))
+            self.energy_frame_pp0 = np.full(self.chunksize, sum(np.absolute(self.signal_frame_pp0)), dtype="int32")
+            to_cumsum = np.add(np.absolute(self.signal_frame_pp0), -np.absolute(self.signal_frame_pp1))
             cumsum = np.cumsum(to_cumsum)
-            energy[1:] = np.add(energy[1:], cumsum[:-1])
-            energy = np.add(energy,self.noise)
+            self.energy_frame_pp0[1:] = np.add(self.energy_frame_pp0[1:], cumsum[:-1])
+            self.energy_frame_pp0 = np.add(self.energy_frame_pp0,self.noise)
 
             # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
             # " r_coeff calculations"
@@ -245,19 +251,20 @@ class LiveFFTWidget(QtGui.QWidget):
             # to determine exact time of onset
             # could not think of any way this could be done faster
             for i in range(self.tempo_res):
-                energy_arg = np.concatenate((self.energy_frame[i*self.chunksize/self.tempo_res:],
-                                             energy[:-(self.tempo_res-i)*self.chunksize/self.tempo_res]))
-                self.rcoeff_frame[i] = np.corrcoef(energy_arg, np.arange(self.chunksize))[0,1]
+                energy_arg = np.concatenate((self.energy_frame_pp1[i*self.chunksize/self.tempo_res:],
+                                             self.energy_frame_pp0[:-(self.tempo_res-i)*self.chunksize/self.tempo_res]))
+                self.rcoeff_frame_pp0[i] = np.corrcoef(energy_arg, np.arange(self.chunksize))[0,1]
 
             # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
             # " detecting new note"
             # self.prev_time = time.time()
-            rcoeff_arg = np.concatenate((self.rcoeff_frame_p, self.rcoeff_frame))
+            #print self.rcoeff_frame_pp0
+            rcoeff_arg = np.concatenate((self.rcoeff_frame_pp1, self.rcoeff_frame_pp0))
             # we need the previous rcoeff frame to determine onset
 
             # finding the onset
             for i in range(self.tempo_res, 0, -1):
-                if rcoeff_arg[-i] > 0.8 and all(i < 0.8 for i in rcoeff_arg[-i-30:-i]):
+                if rcoeff_arg[-i] > 0.80 and all(i < 0.80 for i in rcoeff_arg[-i-31:-i]):
                     # to determine crossing point,
                     # 30 entries cooldown - check that previous entries do not have cooldown
                     # TODO: check whether are we looking at the correct time
@@ -266,7 +273,7 @@ class LiveFFTWidget(QtGui.QWidget):
                     # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                     # " note class"
                     # self.prev_time = time.time()
-                    time_arg = np.concatenate((self.signal_frame_p2, self.signal_frame, current_frame))
+                    time_arg = np.concatenate((self.signal_frame_pp2, self.signal_frame_pp1, self.signal_frame_pp0))
                     time_arg = time_arg[-i*self.chunksize/self.tempo_res-self.chunksize:-i*self.chunksize/self.tempo_res]
 
                     # retired code using cqt from librosa
@@ -279,7 +286,7 @@ class LiveFFTWidget(QtGui.QWidget):
                     # following is the hps algorithm
                     # TODO: take the difference between the current chunk and the previous chunk
                     spectrum = np.absolute(np.fft.fft(time_arg))
-                    spectrum[:11] = 0.0  # anything below middle C is muted
+                    spectrum[:10] = 0.0  # anything below middle C is muted
                     spectrum[1024:] = 0.0  # mute second half of spectrum, lazy to change code
 
                     scale1 = [0.0] * (2048 * 6)
@@ -306,68 +313,73 @@ class LiveFFTWidget(QtGui.QWidget):
                     ffreq = hps_max * 44100.0 / (2048.0 * 6.0)  # calculate the corresponding frequency of the peak
                     # TODO: carry out some checks that this note is indeed feasible
                     # forumla: sampling rate / (chunksize * upsampling value)
-                    note_no = (np.log2(ffreq) - np.log2(220)) * 12.0  # take logarithm and find note
+                    note_no = (np.log2(ffreq) - np.log2(220.0)) * 12.0  # take logarithm and find note
                     note_no_rounded = np.round(note_no)  # round off to nearest note
                     # TODO: use notes dict to print the note in solfage form
 
                     print str(ffreq) + ", " + str(note_no) + ", " + str(note_no_rounded) + \
                           " at " + str(time.time() - self.start_time)
+                    self.note_detected = True
 
             # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
             # " storing for recursion"
             # self.prev_time = time.time()
-            self.energy_frame = energy
-            self.signal_frame_p2 = self.signal_frame
-            self.signal_frame = current_frame
-            self.rcoeff_frame_p = self.rcoeff_frame
+            self.energy_frame_pp1 = self.energy_frame_pp0
+            self.signal_frame_pp2 = self.signal_frame_pp1
+            self.signal_frame_pp1 = self.signal_frame_pp0
+            self.rcoeff_frame_pp1 = self.rcoeff_frame_pp0
 
-            #print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
-            # " set time on graph"  # 0.001s
-            # self.prev_time = time.time()
-            # plots the time signal
-            self.line_top.set_data(self.time_vect, energy)
-
-            #print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
-            # " take FFT"
-            # self.prev_time = time.time()
-            # computes and plots the fft signal
-            fft_frame = np.fft.rfft(current_frame)
-
-            #print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
-            # " some thing about scaling"
-            # self.prev_time = time.time()
-            # inherited, don't know what is this for
-            # perhaps it is to normalise the spectrum - plotting is faster without changing axes
-            if self.autoGainCheckBox.checkState() == QtCore.Qt.Checked:
-                fft_frame /= np.abs(fft_frame).max()
-            else:
-                fft_frame *= (1 + self.fixedGainSlider.value()) / 5000000.
-                # print(np.abs(fft_frame).max())
-
-            #print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
-            # " set spectrum on graph"  # 0.001 s
-            # self.prev_time = time.time()
-            self.line_bottom.set_data(self.freq_vect, np.abs(fft_frame))
-
-            #print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
-            # " placeholder"  # 0.8s wdf
-            # self.prev_time = time.time()
-
-            new_pitch = 8.0  # to make this information meaningful
-            precise_pitch = 10.0
-
-            #print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
-            # " set pitch on graph"
-            # self.prev_time = time.time()
-            self.ax_bottom.set_title("pitch = {:.2f} Hz".format(precise_pitch))
-            self.pitch_line.set_data((new_pitch, new_pitch),
-                                     self.ax_bottom.get_ylim())  # move the vertical pitch line
-
-            if self.iteration%1 == 0:  # update plot only after every n chunks, if necessary
+            display_only_note = False
+            if self.note_detected or not display_only_note:
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
-                # " refresh plot"  # 0.105s
+                # " set time on graph"  # 0.001s
                 # self.prev_time = time.time()
-                self.main_figure.canvas.draw()  # refreshes the plots, takes the bulk of time
+                # plots the time signal
+                self.line_top.set_data(self.time_vect, self.energy_frame_pp0)
+
+                # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
+                # " take FFT"
+                # self.prev_time = time.time()
+                # computes and plots the fft signal
+                fft_frame = np.fft.rfft(self.signal_frame_pp0)
+
+                # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
+                # " some thing about scaling"
+                # self.prev_time = time.time()
+                # inherited, don't know what is this for
+                # perhaps it is to normalise the spectrum - plotting is faster without changing axes
+                if self.autoGainCheckBox.checkState() == QtCore.Qt.Checked:
+                    fft_frame /= np.abs(fft_frame).max()
+                else:
+                    fft_frame *= (1 + self.fixedGainSlider.value()) / 5000000.
+                    # print(np.abs(fft_frame).max())
+
+                # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
+                # " set spectrum on graph"  # 0.001 s
+                # self.prev_time = time.time()
+                self.line_bottom.set_data(self.freq_vect, np.abs(fft_frame))
+
+                # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
+                # " placeholder"  # 0.8s wdf
+                # self.prev_time = time.time()
+
+                new_pitch = 8.0  # to make this information meaningful
+                precise_pitch = 10.0
+
+                # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
+                # " set pitch on graph"
+                # self.prev_time = time.time()
+                self.ax_bottom.set_title("pitch = {:.2f} Hz".format(precise_pitch))
+                self.pitch_line.set_data((new_pitch, new_pitch),
+                                         self.ax_bottom.get_ylim())  # move the vertical pitch line
+
+                if self.iteration % 1 == 0:  # update plot only after every n chunks, if necessary
+                    # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
+                    # " refresh plot"  # 0.105s
+                    # self.prev_time = time.time()
+                    self.main_figure.canvas.draw()  # refreshes the plots, takes the bulk of time
+
+                self.note_detected = False
 
         self.iteration += 1
         #print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
@@ -388,7 +400,6 @@ def compute_pitch_hps(x, Fs, dF=None, Fmin=30., Fmax=900., H=5):
     original hps alogrithm, which has a long running time
     don't know how the last part of this algorithm works
     """
-
     # default value for dF frequency resolution
     if dF == None:
         dF = Fs / x.size
