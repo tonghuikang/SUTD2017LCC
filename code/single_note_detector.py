@@ -258,7 +258,8 @@ class LiveFFTWidget(QtGui.QWidget):
             # energy_arg = np.concatenate((self.energy_frame_pp1[i*self.tempo_num:],
             #                              self.energy_frame_pp0[:-(self.tempo_res-i)*self.tempo_num]))
             for i in range(self.tempo_res):
-                self.rcoeff_frame_pp0[i] = np.corrcoef(energy_arg[i:(i+self.chunksize)], np.arange(self.chunksize))[0,1]
+                self.rcoeff_frame_pp0[i] = np.corrcoef(energy_arg[i*self.tempo_num:(i*self.tempo_num+self.chunksize)],
+                                                       np.arange(self.chunksize))[0, 1]
 
             # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
             # " detecting new note"
@@ -272,9 +273,9 @@ class LiveFFTWidget(QtGui.QWidget):
             for i in range(self.tempo_res, 0, -1):
                 # if rcoeff_arg[-i] > 0.80 and all(i < 0.80 for i in rcoeff_arg[-i-5:-i]):
                 if rcoeff_arg[-i] > 0.80 and np.max(rcoeff_arg[-i-31:-i]) < 0.80:
-                    # print i
-                    # print rcoeff_arg[-i]
-                    # print np.around(rcoeff_arg, 2)
+                    print i
+                    print rcoeff_arg[-i]
+                    print np.around(rcoeff_arg, 2)
                     # print rcoeff_arg[-i-31:-i+1]
                     # to determine crossing point,
                     # 30 entries cooldown - check that previous entries do not have cooldown
@@ -284,8 +285,8 @@ class LiveFFTWidget(QtGui.QWidget):
                     # " note class"
                     # self.prev_time = time.time()
                     time_arg = np.concatenate((self.signal_frame_pp2, self.signal_frame_pp1, self.signal_frame_pp0))
-                    self.signal_to_show = time_arg[-i * self.chunksize / self.tempo_res - 2 * self.chunksize:-i * self.chunksize / self.tempo_res]
-                    time_arg = time_arg[-i*self.chunksize/self.tempo_res-self.chunksize:-i*self.chunksize/self.tempo_res]
+                    self.signal_to_show = time_arg[-i * self.tempo_num - 2 * self.chunksize: -i * self.tempo_num]
+                    time_arg = time_arg[-i*self.tempo_num - self.chunksize: -i*self.tempo_num]
 
                     # retired code using cqt from librosa
                     # float = 1.0 / 32768.0 * np.array(time_arg)
@@ -335,8 +336,8 @@ class LiveFFTWidget(QtGui.QWidget):
 
                     # print str(ffreq) + ", " + str(note) + ", " + str(note_no_difference) + \
                     #       " at " + str(time.time() - self.start_time)
-                    print ("{:.2f}, {:3s} {:+.2f} at {:.3f}s"
-                           .format(ffreq, note, note_no_difference, time.time() - self.start_time))
+                    print ("{:.2f}Hz({:02}), {:3s} {:+.2f} at {:.3f}s"
+                           .format(ffreq, int(note_no_rounded), note, note_no_difference, time.time() - self.start_time))
                     self.note_detected = True
 
             display_only_note = True
@@ -347,9 +348,9 @@ class LiveFFTWidget(QtGui.QWidget):
                 # plots the time signal
                 # self.line_top.set_data(self.time_vect, self.energy_frame_pp0)  # for energy, shows one chunk
                 # self.line_top.set_data(self.time_vect, self.signal_frame_pp1)  # for signal, shows one chunk
-                # self.line_top.set_data(self.time_vect, self.signal_to_show)  # shows two chunk
-                self.line_top.set_data(self.time_vect, energy_arg)
-                #self.line_top.set_data(self.time_vect, np.concatenate((self.signal_frame_pp1, self.signal_frame_pp0)))
+                self.line_top.set_data(self.time_vect, self.signal_to_show)  # shows two chunk
+                # self.line_top.set_data(self.time_vect, energy_arg)
+                # self.line_top.set_data(self.time_vect, np.concatenate((self.signal_frame_pp1, self.signal_frame_pp0)))
 
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " take FFT"
