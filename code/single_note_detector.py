@@ -90,20 +90,22 @@ class LiveFFTWidget(QtGui.QWidget):
 
         self.chunksize = 2048
         self.tempo_res = 32  # r_coeff resolution, needs to be a factor of chunksize
+        self.tempo_num = int(self.chunksize/self.tempo_res)
         self.iteration = 0  # for counting, if needed
         self.noise = np.round(200000*np.random.randn(self.chunksize))  # to desensitise onset detection
         self.sampling_rate = 44100
-        self.notes_dict = {0: 'C', 1: 'C#', 2: 'D', 3: 'D#', 4: 'E', 5: 'F',
-                           6: 'F#', 7: 'G', 8: 'G#', 9: 'A', 10: 'A#', 11: 'B'}
+        #self.notes_dict = {0: 'C', 1: 'C#', 2: 'D', 3: 'D#', 4: 'E', 5: 'F',
+        #                  6: 'F#', 7: 'G', 8: 'G#', 9: 'A', 10: 'A#', 11: 'B'}
+        self.notes_dict = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
         # holding variables
-        self.signal_frame_pp0 = [0] * self.chunksize          # past signal chunk
+        self.signal_frame_pp0 = [0] * self.chunksize    # past signal chunk
         self.signal_frame_pp1 = [0] * self.chunksize
-        self.signal_frame_pp2 = [0] * self.chunksize     # past past signal chunk
-        self.energy_frame_pp0 = [0] * self.chunksize          # past energy chunk
-        self.energy_frame_pp1 = [0] * self.chunksize  # past energy chunk
-        self.energy_frame_pp2 = [0] * self.chunksize  # past energy chunk
-        self.rcoeff_frame_pp0 = [0.0] * int(self.tempo_res)   # current rcoeff chunk - should change
+        self.signal_frame_pp2 = [0] * self.chunksize    # past past signal chunk
+        self.energy_frame_pp0 = [0] * self.chunksize    # past energy chunk
+        self.energy_frame_pp1 = [0] * self.chunksize    # past energy chunk
+        self.energy_frame_pp2 = [0] * self.chunksize    # past energy chunk
+        self.rcoeff_frame_pp0 = [0.0] * int(self.tempo_res)  # current rcoeff chunk - should change
         self.rcoeff_frame_pp1 = [0.0] * int(self.tempo_res)  # past roceff chunk
         self.note_detected = False
         #self.signal_to_show = [0] * (self.chunksize*2)
@@ -203,7 +205,7 @@ class LiveFFTWidget(QtGui.QWidget):
 
         # line objects
         self.line_top, = self.ax_top.plot(self.time_vect,
-                                          np.ones_like(self.time_vect), lw=0.5)
+                                          np.ones_like(self.time_vect), lw=0.2)
 
         self.line_bottom, = self.ax_bottom.plot(self.freq_vect,
                                                 np.ones_like(self.freq_vect), lw=0.5)
@@ -240,11 +242,11 @@ class LiveFFTWidget(QtGui.QWidget):
             # numpy operations are more efficient than using python loops
             # the size of the rectangular window is one chunksize
             # convolution can be considered
-            self.energy_frame_pp0 = np.full(self.chunksize, sum(np.absolute(self.signal_frame_pp0)), dtype="int32")
+            self.energy_frame_pp0 = np.full(self.chunksize, sum(np.absolute(self.signal_frame_pp1)), dtype="int32")
             to_cumsum = np.add(np.absolute(self.signal_frame_pp0), -np.absolute(self.signal_frame_pp1))
             cumsum = np.cumsum(to_cumsum)
             self.energy_frame_pp0[1:] = np.add(self.energy_frame_pp0[1:], cumsum[:-1])
-            self.energy_frame_pp0 = np.add(self.energy_frame_pp0,self.noise)
+            self.energy_frame_pp0 = np.add(self.energy_frame_pp0, self.noise)
 
             # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
             # " r_coeff calculations"
@@ -252,25 +254,31 @@ class LiveFFTWidget(QtGui.QWidget):
             # calculating pearson correlation coefficient at 2048/32 samples
             # to determine exact time of onset
             # could not think of any way this could be done faster
+            energy_arg = np.concatenate((self.energy_frame_pp1, self.energy_frame_pp0))
+            # energy_arg = np.concatenate((self.energy_frame_pp1[i*self.tempo_num:],
+            #                              self.energy_frame_pp0[:-(self.tempo_res-i)*self.tempo_num]))
             for i in range(self.tempo_res):
-                energy_arg = np.concatenate((self.energy_frame_pp1[i*self.chunksize/self.tempo_res:],
-                                             self.energy_frame_pp0[:-(self.tempo_res-i)*self.chunksize/self.tempo_res]))
-                self.rcoeff_frame_pp0[i] = np.corrcoef(energy_arg, np.arange(self.chunksize))[0,1]
+                self.rcoeff_frame_pp0[i] = np.corrcoef(energy_arg[i:(i+self.chunksize)], np.arange(self.chunksize))[0,1]
 
             # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
             # " detecting new note"
             # self.prev_time = time.time()
-            #print self.rcoeff_frame_pp0
             rcoeff_arg = np.concatenate((self.rcoeff_frame_pp1, self.rcoeff_frame_pp0))
+            # print np.around(rcoeff_arg, 2)  # print for debugging false negatives
             # we need the previous rcoeff frame to determine onset
 
             # finding the onset
+            # need to loop :(
             for i in range(self.tempo_res, 0, -1):
-                if rcoeff_arg[-i] > 0.80 and all(i < 0.80 for i in rcoeff_arg[-i-31:-i]):
+                # if rcoeff_arg[-i] > 0.80 and all(i < 0.80 for i in rcoeff_arg[-i-5:-i]):
+                if rcoeff_arg[-i] > 0.80 and np.max(rcoeff_arg[-i-31:-i]) < 0.80:
+                    # print i
+                    # print rcoeff_arg[-i]
+                    # print np.around(rcoeff_arg, 2)
+                    # print rcoeff_arg[-i-31:-i+1]
                     # to determine crossing point,
                     # 30 entries cooldown - check that previous entries do not have cooldown
-                    # TODO: check whether are we looking at the correct time
-                    #print "NEW NOTE at " + str(time.time() - self.start_time)
+                    # print "NEW NOTE at " + str(time.time() - self.start_time)
 
                     # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                     # " note class"
@@ -313,34 +321,35 @@ class LiveFFTWidget(QtGui.QWidget):
                     scale3[:2048 * 2] = scale1[::3]
                     hps = np.prod((scale1, scale2, scale3), axis=0)  # the "product" in harmonic product spectrum
                     hps_max = np.argmax(hps)  # determine the location of the peak of hps result
-                    ffreq = hps_max * 44100.0 / (2048.0 * 6.0)  # calculate the corresponding frequency of the peak
-                    # TODO: carry out some checks that this note is indeed feasible
-                    # forumla: sampling rate / (chunksize * upsampling value)
-                    note_no = (np.log2(ffreq) - np.log2(220.0)) * 12.0  # take logarithm and find note
-                    note_no_rounded = np.round(note_no)  # round off to nearest note
-                    # TODO: use notes dict to print the note in solfage form
+                    # calculate the corresponding frequency of the peak
+                    ffreq = hps_max * 44100.0 / (2048.0 * 6.0)  # sampling rate / (chunksize * upsampling value)
 
-                    print str(ffreq) + ", " + str(note_no) + ", " + str(note_no_rounded) + \
-                          " at " + str(time.time() - self.start_time)
+                    # TODO: carry out some checks that this note is indeed feasible
+                    # printing note in solfage form
+                    note_no = -3 + (np.log2(ffreq) - np.log2(220.0)) * 12.0  # take logarithm and find note
+                    note_no_rounded = np.round(note_no)  # round off to nearest note
+                    note_no_difference = note_no - note_no_rounded
+                    octave_no = 4 + int(note_no_rounded // 12)
+                    solfate_no = int(note_no_rounded) % 12
+                    note = str(self.notes_dict[solfate_no])+str(octave_no)
+
+                    # print str(ffreq) + ", " + str(note) + ", " + str(note_no_difference) + \
+                    #       " at " + str(time.time() - self.start_time)
+                    print ("{:.2f}, {:3s} {:+.2f} at {:.3f}s"
+                           .format(ffreq, note, note_no_difference, time.time() - self.start_time))
                     self.note_detected = True
 
-            # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
-            # " storing for recursion"
-            # self.prev_time = time.time()
-            self.energy_frame_pp1 = self.energy_frame_pp0
-            self.signal_frame_pp2 = self.signal_frame_pp1
-            self.signal_frame_pp1 = self.signal_frame_pp0
-            self.rcoeff_frame_pp1 = self.rcoeff_frame_pp0
-
-            display_only_note = False
+            display_only_note = True
             if self.note_detected or not display_only_note:
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " set time on graph"  # 0.001s
                 # self.prev_time = time.time()
                 # plots the time signal
-                # self.line_top.set_data(self.time_vect, self.energy_frame_pp0)  # for energy
-                # self.line_top.set_data(self.time_vect, self.signal_frame_pp1)
-                self.line_top.set_data(self.time_vect, self.signal_to_show)  # show only when note is played
+                # self.line_top.set_data(self.time_vect, self.energy_frame_pp0)  # for energy, shows one chunk
+                # self.line_top.set_data(self.time_vect, self.signal_frame_pp1)  # for signal, shows one chunk
+                # self.line_top.set_data(self.time_vect, self.signal_to_show)  # shows two chunk
+                self.line_top.set_data(self.time_vect, energy_arg)
+                #self.line_top.set_data(self.time_vect, np.concatenate((self.signal_frame_pp1, self.signal_frame_pp0)))
 
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " take FFT"
@@ -386,6 +395,14 @@ class LiveFFTWidget(QtGui.QWidget):
 
                 self.note_detected = False
 
+            # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
+            # " storing for recursion"
+            # self.prev_time = time.time()
+            self.signal_frame_pp2 = self.signal_frame_pp1[:]
+            self.signal_frame_pp1 = self.signal_frame_pp0[:]
+            self.energy_frame_pp1 = self.energy_frame_pp0[:]
+            self.rcoeff_frame_pp1 = self.rcoeff_frame_pp0[:]
+
         self.iteration += 1
         #print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
         # " end of loop \n \n"
@@ -394,13 +411,14 @@ class LiveFFTWidget(QtGui.QWidget):
 
 def downsample(pwm, fraction, signal_length):
     """downsample n to 1"""
+    # currently not used
     convolve_result = [0.0] * int(signal_length / 2)
     # convolve_result = [1.0] * int(signal_length / 2)
     convolve_full = np.convolve(pwm, [1.0 / fraction] * fraction)[fraction - 1::fraction]
     convolve_result[:len(convolve_full)] = convolve_full
     return convolve_result
 
-def compute_pitch_hps(x, Fs, dF=None, Fmin=30., Fmax=900., H=5):
+def compute_pitch_hps(x, Fs, dF=None, Fmin=30., Fmax=900., H=5):  # with the original package
     """
     original hps alogrithm, which has a long running time
     don't know how the last part of this algorithm works
