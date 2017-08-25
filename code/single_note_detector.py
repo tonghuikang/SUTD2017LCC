@@ -106,6 +106,8 @@ class LiveFFTWidget(QtGui.QWidget):
         self.rcoeff_frame_pp0 = [0.0] * int(self.tempo_res)   # current rcoeff chunk - should change
         self.rcoeff_frame_pp1 = [0.0] * int(self.tempo_res)  # past roceff chunk
         self.note_detected = False
+        #self.signal_to_show = [0] * (self.chunksize*2)
+        self.signal_to_show = [0] * (self.chunksize*2)
 
         # customize the UI
         self.initUI()
@@ -173,9 +175,9 @@ class LiveFFTWidget(QtGui.QWidget):
 
         # computes the parameters that will be used during plotting
         self.freq_vect = np.fft.rfftfreq(mic.chunksize, 1./mic.rate)  # original
-        self.time_vect = np.arange(mic.chunksize, dtype=np.float32) / mic.rate * 1000
-        # QUESTION: Why 1000? - convert from seconds to milliseconds?
-        # these are axes that we will plot against
+        #self.time_vect = np.arange(mic.chunksize, dtype=np.float32) / mic.rate * 1000  # x1000 for millisec
+        self.time_vect = np.arange(-mic.chunksize, mic.chunksize, dtype=np.float32) / mic.rate * 1000
+        # the onset will be in the middle
 
     def connectSlots(self):
         pass  # don't know what is this for
@@ -188,8 +190,8 @@ class LiveFFTWidget(QtGui.QWidget):
         # top plot: currently to show energy
         self.ax_top = self.main_figure.figure.add_subplot(211)
         self.ax_top.set_ylim(-32768, 32768)  # original
-        self.ax_top.set_ylim(-32768 * 100, 32768 * 100)  # to show energy
-        self.ax_top.set_xlim(0, self.time_vect.max())
+        # self.ax_top.set_ylim(-32768 * 100, 32768 * 100)  # to show energy
+        self.ax_top.set_xlim(self.time_vect.min(), self.time_vect.max())
         self.ax_top.set_xlabel(u'time (ms)', fontsize=6)
 
         # bottom plot: currently to show spectrum
@@ -274,6 +276,7 @@ class LiveFFTWidget(QtGui.QWidget):
                     # " note class"
                     # self.prev_time = time.time()
                     time_arg = np.concatenate((self.signal_frame_pp2, self.signal_frame_pp1, self.signal_frame_pp0))
+                    self.signal_to_show = time_arg[-i * self.chunksize / self.tempo_res - 2 * self.chunksize:-i * self.chunksize / self.tempo_res]
                     time_arg = time_arg[-i*self.chunksize/self.tempo_res-self.chunksize:-i*self.chunksize/self.tempo_res]
 
                     # retired code using cqt from librosa
@@ -335,7 +338,9 @@ class LiveFFTWidget(QtGui.QWidget):
                 # " set time on graph"  # 0.001s
                 # self.prev_time = time.time()
                 # plots the time signal
-                self.line_top.set_data(self.time_vect, self.energy_frame_pp0)
+                # self.line_top.set_data(self.time_vect, self.energy_frame_pp0)  # for energy
+                # self.line_top.set_data(self.time_vect, self.signal_frame_pp1)
+                self.line_top.set_data(self.time_vect, self.signal_to_show)  # show only when note is played
 
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " take FFT"
