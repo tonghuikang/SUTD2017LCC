@@ -99,14 +99,18 @@ class LiveFFTWidget(QtGui.QWidget):
         self.notes_dict = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
         # holding variables
-        self.signal_frame_pp0 = [0] * self.chunksize    # past signal chunk
+        self.signal_frame_pp0 = [0] * self.chunksize
         self.signal_frame_pp1 = [0] * self.chunksize
-        self.signal_frame_pp2 = [0] * self.chunksize    # past past signal chunk
-        self.energy_frame_pp0 = [0] * self.chunksize    # past energy chunk
-        self.energy_frame_pp1 = [0] * self.chunksize    # past energy chunk
-        self.energy_frame_pp2 = [0] * self.chunksize    # past energy chunk
-        self.rcoeff_frame_pp0 = [0.0] * int(self.tempo_res)  # current rcoeff chunk - should change
-        self.rcoeff_frame_pp1 = [0.0] * int(self.tempo_res)  # past roceff chunk
+        self.signal_frame_pp2 = [0] * self.chunksize
+        self.signal_frame_pp3 = [0] * self.chunksize
+        self.energy_frame_pp0 = [0] * self.chunksize
+        self.energy_frame_pp1 = [0] * self.chunksize
+        self.energy_frame_pp2 = [0] * self.chunksize
+        self.energy_frame_pp3 = [0] * self.chunksize
+        self.rcoeff_frame_pp1 = [0.0] * int(self.tempo_res)
+        self.rcoeff_frame_pp2 = [0.0] * int(self.tempo_res)
+        self.rcoeff_frame_pp3 = [0.0] * int(self.tempo_res)
+
         self.note_detected = False
         #self.signal_to_show = [0] * (self.chunksize*2)
         self.signal_to_show = [0] * (self.chunksize*2)
@@ -242,8 +246,8 @@ class LiveFFTWidget(QtGui.QWidget):
             # numpy operations are more efficient than using python loops
             # the size of the rectangular window is one chunksize
             # convolution can be considered
-            self.energy_frame_pp0 = np.full(self.chunksize, sum(np.absolute(self.signal_frame_pp1)), dtype="int32")
-            to_cumsum = np.add(np.absolute(self.signal_frame_pp0), -np.absolute(self.signal_frame_pp1))
+            self.energy_frame_pp0 = np.full(self.chunksize, sum(np.absolute(self.signal_frame_pp2)), dtype="int32")
+            to_cumsum = np.add(np.absolute(self.signal_frame_pp1), -np.absolute(self.signal_frame_pp2))
             cumsum = np.cumsum(to_cumsum)
             self.energy_frame_pp0[1:] = np.add(self.energy_frame_pp0[1:], cumsum[:-1])
             self.energy_frame_pp0 = np.add(self.energy_frame_pp0, self.noise)
@@ -258,27 +262,24 @@ class LiveFFTWidget(QtGui.QWidget):
             # energy_arg = np.concatenate((self.energy_frame_pp1[i*self.tempo_num:],
             #                              self.energy_frame_pp0[:-(self.tempo_res-i)*self.tempo_num]))
             for i in range(self.tempo_res):
-                self.rcoeff_frame_pp0[i] = np.corrcoef(energy_arg[i*self.tempo_num:(i*self.tempo_num+self.chunksize)],
+                self.rcoeff_frame_pp1[i] = np.corrcoef(energy_arg[i*self.tempo_num:(i*self.tempo_num+self.chunksize)],
                                                        np.arange(self.chunksize))[0, 1]
 
             # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
             # " detecting new note"
             # self.prev_time = time.time()
-            rcoeff_arg = np.concatenate((self.rcoeff_frame_pp1, self.rcoeff_frame_pp0))
-            # print np.around(rcoeff_arg, 2)  # print for debugging false negatives
+            rcoeff_arg = np.concatenate((self.rcoeff_frame_pp2, self.rcoeff_frame_pp1))
             # we need the previous rcoeff frame to determine onset
 
-            # finding the onset
-            # need to loop :(
+            # finding the onset, any way not to loop?
             for i in range(self.tempo_res, 0, -1):
                 # if rcoeff_arg[-i] > 0.80 and all(i < 0.80 for i in rcoeff_arg[-i-5:-i]):
                 if rcoeff_arg[-i] > 0.80 and np.max(rcoeff_arg[-i-31:-i]) < 0.80:
                     print i
                     print rcoeff_arg[-i]
                     print np.around(rcoeff_arg, 2)
-                    # print rcoeff_arg[-i-31:-i+1]
                     # to determine crossing point,
-                    # 30 entries cooldown - check that previous entries do not have cooldown
+                    # 31 entries cooldown - check that previous entries do not have cooldown
                     # print "NEW NOTE at " + str(time.time() - self.start_time)
 
                     # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
@@ -298,7 +299,7 @@ class LiveFFTWidget(QtGui.QWidget):
                     # following is the hps algorithm
                     # TODO: take the difference between the current chunk and the previous chunk
                     spectrum = np.absolute(np.fft.fft(time_arg))
-                    spectrum[:10] = 0.0  # anything below middle C is muted
+                    spectrum[:12] = 0.0  # anything below middle C is muted
                     spectrum[1024:] = 0.0  # mute second half of spectrum, lazy to change code
 
                     scale1 = [0.0] * (2048 * 6)
@@ -347,16 +348,16 @@ class LiveFFTWidget(QtGui.QWidget):
                 # self.prev_time = time.time()
                 # plots the time signal
                 # self.line_top.set_data(self.time_vect, self.energy_frame_pp0)  # for energy, shows one chunk
-                # self.line_top.set_data(self.time_vect, self.signal_frame_pp1)  # for signal, shows one chunk
+                # self.line_top.set_data(self.time_vect, self.signal_frame_pp2)  # for signal, shows one chunk
                 self.line_top.set_data(self.time_vect, self.signal_to_show)  # shows two chunk
                 # self.line_top.set_data(self.time_vect, energy_arg)
-                # self.line_top.set_data(self.time_vect, np.concatenate((self.signal_frame_pp1, self.signal_frame_pp0)))
+                # self.line_top.set_data(self.time_vect, np.concatenate((self.signal_frame_pp2, self.signal_frame_pp1)))
 
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " take FFT"
                 # self.prev_time = time.time()
                 # computes and plots the fft signal
-                fft_frame = np.fft.rfft(self.signal_frame_pp0)
+                fft_frame = np.fft.rfft(self.signal_frame_pp1)
 
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " some thing about scaling"
@@ -399,10 +400,11 @@ class LiveFFTWidget(QtGui.QWidget):
             # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
             # " storing for recursion"
             # self.prev_time = time.time()
+            self.signal_frame_pp3 = self.signal_frame_pp2[:]
             self.signal_frame_pp2 = self.signal_frame_pp1[:]
             self.signal_frame_pp1 = self.signal_frame_pp0[:]
             self.energy_frame_pp1 = self.energy_frame_pp0[:]
-            self.rcoeff_frame_pp1 = self.rcoeff_frame_pp0[:]
+            self.rcoeff_frame_pp2 = self.rcoeff_frame_pp1[:]
 
         self.iteration += 1
         #print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
