@@ -13,7 +13,6 @@ import pyaudio
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-import librosa
 from PyQt4 import QtGui, uic, QtCore
 from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
@@ -21,7 +20,6 @@ from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as Navigatio
 # variables in the program (not necessarily easily changed):
 # chunksize - elaborated in class MicrophoneRecorder
 # noise (for energy) - determines the onset detection desensitivity
-# TODO: calculate percentage of area under graph due to the sound from ffreq
 # threshold crossing point - determines the onset detection sensitivity
 # lower threshold of spectrum - muting everything below the frequency
 
@@ -84,6 +82,7 @@ class MplFigure(object):  # don't know what is this for
         self.canvas = FigureCanvas(self.figure)
         self.toolbar = NavigationToolbar(self.canvas, parent)
 
+
 class LiveFFTWidget(QtGui.QWidget):
     def __init__(self):
         QtGui.QWidget.__init__(self)
@@ -94,8 +93,6 @@ class LiveFFTWidget(QtGui.QWidget):
         self.iteration = 0  # for counting, if needed
         self.noise = np.round(200000*np.random.randn(self.chunksize))  # to desensitise onset detection
         self.sampling_rate = 44100
-        #self.notes_dict = {0: 'C', 1: 'C#', 2: 'D', 3: 'D#', 4: 'E', 5: 'F',
-        #                  6: 'F#', 7: 'G', 8: 'G#', 9: 'A', 10: 'A#', 11: 'B'}
         self.notes_dict = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
         # holding variables
@@ -112,8 +109,9 @@ class LiveFFTWidget(QtGui.QWidget):
         self.rcoeff_frame_pp3 = [0.0] * int(self.tempo_res)
 
         self.note_detected = False
-        #self.signal_to_show = [0] * (self.chunksize*2)
+        self.ffreq = 0.0
         self.signal_to_show = [0] * (self.chunksize*2)
+        self.signal_to_ayse = [0] * (self.chunksize)
 
         # customize the UI
         self.initUI()
@@ -181,7 +179,6 @@ class LiveFFTWidget(QtGui.QWidget):
 
         # computes the parameters that will be used during plotting
         self.freq_vect = np.fft.rfftfreq(mic.chunksize, 1./mic.rate)  # original
-        #self.time_vect = np.arange(mic.chunksize, dtype=np.float32) / mic.rate * 1000  # x1000 for millisec
         self.time_vect = np.arange(-mic.chunksize, mic.chunksize, dtype=np.float32) / mic.rate * 1000
         # the onset will be in the middle
 
@@ -190,8 +187,7 @@ class LiveFFTWidget(QtGui.QWidget):
 
     def initMplWidget(self):
         """
-        creates initial matplotlib plots in the main window and keeps
-        references for further use
+        creates initial matplotlib plots in the main window and keeps references for further use
         """
         # top plot: currently to show energy
         self.ax_top = self.main_figure.figure.add_subplot(211)
@@ -218,9 +214,7 @@ class LiveFFTWidget(QtGui.QWidget):
                                                 self.freq_vect[self.freq_vect.size / 2]),
                                                self.ax_bottom.get_ylim(), lw=2)
         # This plots for vertical line that marks the pitch
-
-        # tight layout
-        #plt.tight_layout()
+        # plt.tight_layout()  # tight layout
 
     def handleNewData(self):
         """ handles the asynchronously collected sound chunks """
@@ -275,30 +269,34 @@ class LiveFFTWidget(QtGui.QWidget):
             for i in range(self.tempo_res, 0, -1):
                 # if rcoeff_arg[-i] > 0.80 and all(i < 0.80 for i in rcoeff_arg[-i-5:-i]):
                 if rcoeff_arg[-i] > 0.80 and np.max(rcoeff_arg[-i-31:-i]) < 0.80:
-                    print i
-                    print rcoeff_arg[-i]
-                    print np.around(rcoeff_arg, 2)
-                    # to determine crossing point,
+                    # to determine onset  - where the rcoeff graph crosses 0.80,
                     # 31 entries cooldown - check that previous entries do not have cooldown
-                    # print "NEW NOTE at " + str(time.time() - self.start_time)
+                    # print i
+                    # print rcoeff_arg[-i]
+                    # print np.around(rcoeff_arg, 2)
 
                     # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                     # " note class"
                     # self.prev_time = time.time()
-                    time_arg = np.concatenate((self.signal_frame_pp2, self.signal_frame_pp1, self.signal_frame_pp0))
-                    self.signal_to_show = time_arg[-i * self.tempo_num - 2 * self.chunksize: -i * self.tempo_num]
-                    time_arg = time_arg[-i*self.tempo_num - self.chunksize: -i*self.tempo_num]
+                    time_arg = np.concatenate((self.signal_frame_pp3, self.signal_frame_pp2,
+                                               self.signal_frame_pp1, self.signal_frame_pp0))
+                    self.signal_to_show = time_arg[-i*self.tempo_num - int(2.25*self.chunksize):
+                                                   -i*self.tempo_num - int(0.25*self.chunksize)]
+                    self.signal_to_ayse = time_arg[-i*self.tempo_num - int(1.25*self.chunksize):
+                                                   -i*self.tempo_num - int(0.25*self.chunksize)]
+                    signal_to_deduct = time_arg[-i*self.tempo_num - int(2.25*self.chunksize):
+                                                -i*self.tempo_num - int(1.25*self.chunksize)]
+                    # Consider whether should a window be applied
 
-                    # retired code using cqt from librosa
-                    # float = 1.0 / 32768.0 * np.array(time_arg)
-                    # y_harm, y_perc = librosa.effects.hpss(float)
-                    # chroma = librosa.feature.chroma_cqt(y=y_harm, sr=self.sampling_rate, hop_length=65536)
-                    # max = np.argmax(chroma)
-                    # note = self.notes_dict[max]
+                    spectrum = np.absolute(np.fft.fft(self.signal_to_ayse))
+                    spectrum_to_deduct = np.absolute(np.fft.fft(signal_to_deduct))
+                    to_subtract = True  # take the spectral difference between the current and previous chunk
+                    if to_subtract:
+                        spectrum = np.clip(np.add(spectrum, -1 * np.array(spectrum_to_deduct)), 0, 100000000)
+                        # consider the effectiveness of taking the difference
 
+                    self.spectrum = np.array(spectrum[:int(0.5*self.chunksize)+1])  # to be plotted
                     # following is the hps algorithm
-                    # TODO: take the difference between the current chunk and the previous chunk
-                    spectrum = np.absolute(np.fft.fft(time_arg))
                     spectrum[:12] = 0.0  # anything below middle C is muted
                     spectrum[1024:] = 0.0  # mute second half of spectrum, lazy to change code
 
@@ -324,40 +322,58 @@ class LiveFFTWidget(QtGui.QWidget):
                     hps = np.prod((scale1, scale2, scale3), axis=0)  # the "product" in harmonic product spectrum
                     hps_max = np.argmax(hps)  # determine the location of the peak of hps result
                     # calculate the corresponding frequency of the peak
-                    ffreq = hps_max * 44100.0 / (2048.0 * 6.0)  # sampling rate / (chunksize * upsampling value)
+                    self.ffreq = hps_max * 44100.0 / (2048.0 * 6.0)  # sampling rate / (chunksize * upsampling value)
 
-                    # TODO: carry out some checks that this note is indeed feasible
-                    # printing note in solfage form
-                    note_no = -3 + (np.log2(ffreq) - np.log2(220.0)) * 12.0  # take logarithm and find note
-                    note_no_rounded = np.round(note_no)  # round off to nearest note
-                    note_no_difference = note_no - note_no_rounded
-                    octave_no = 4 + int(note_no_rounded // 12)
-                    solfate_no = int(note_no_rounded) % 12
-                    note = str(self.notes_dict[solfate_no])+str(octave_no)
+                    if hps_max < 5:
+                        print "low ffreq"  # should not be possible - just investigating
+                        break
 
-                    # print str(ffreq) + ", " + str(note) + ", " + str(note_no_difference) + \
-                    #       " at " + str(time.time() - self.start_time)
-                    print ("{:.2f}Hz({:02}), {:3s} {:+.2f} at {:.3f}s"
-                           .format(ffreq, int(note_no_rounded), note, note_no_difference, time.time() - self.start_time))
-                    self.note_detected = True
+                    # TODO: add some weights, adapt based on how high ffreq is
+                    total_energy = np.sum(scale1)
+                    total_energy_due_to_ffreq = np.sum(scale1[::hps_max]) \
+                                                + np.sum(scale1[1::hps_max]) + np.sum(scale1[:hps_max - 1:hps_max]) \
+                                                # + np.sum(scale1[2::hps_max]) + np.sum(scale1[:hps_max - 2:hps_max]) \
+                                                # + np.sum(scale1[3::hps_max]) + np.sum(scale1[:hps_max - 3:hps_max]) \
+                                                # + np.sum(scale1[4::hps_max]) + np.sum(scale1[:hps_max - 4:hps_max]) \
+                                                # + np.sum(scale1[5::hps_max]) + np.sum(scale1[:hps_max - 5:hps_max]) \
+                                                # + np.sum(scale1[6::hps_max]) + np.sum(scale1[:hps_max - 6:hps_max])
+
+                    portion_of_energy = (total_energy_due_to_ffreq/total_energy)*20
+
+                    if portion_of_energy > 1:
+                        # printing note in solfage form
+                        note_no = -3 + (np.log2(self.ffreq) - np.log2(220.0)) * 12.0  # take logarithm and find note
+                        note_no_rounded = np.round(note_no)  # round off to nearest note
+                        note_no_difference = note_no - note_no_rounded
+                        octave_no = 4 + int(note_no_rounded // 12)
+                        solfate_no = int(note_no_rounded) % 12
+                        note = str(self.notes_dict[solfate_no]) + str(octave_no)
+
+                        print ("{:.2f}Hz({:02}) {:.2f}, {:3s} {:+.2f} at {:.3f}s"
+                               .format(self.ffreq, int(note_no_rounded), portion_of_energy, note, note_no_difference,
+                                       time.time() - self.start_time))
+                        self.note_detected = True
+                    else:
+                        print("inharmonic sound detected at {:.3f}s"
+                              .format(time.time() - self.start_time))
 
             display_only_note = True
             if self.note_detected or not display_only_note:
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " set time on graph"  # 0.001s
                 # self.prev_time = time.time()
-                # plots the time signal
-                # self.line_top.set_data(self.time_vect, self.energy_frame_pp0)  # for energy, shows one chunk
-                # self.line_top.set_data(self.time_vect, self.signal_frame_pp2)  # for signal, shows one chunk
-                self.line_top.set_data(self.time_vect, self.signal_to_show)  # shows two chunk
-                # self.line_top.set_data(self.time_vect, energy_arg)
+                self.line_top.set_data(self.time_vect, self.signal_to_show)  # plots the time signal, onset on middle
                 # self.line_top.set_data(self.time_vect, np.concatenate((self.signal_frame_pp2, self.signal_frame_pp1)))
+                # self.line_top.set_data(self.time_vect, energy_arg)  # plots the energy
 
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " take FFT"
                 # self.prev_time = time.time()
-                # computes and plots the fft signal
-                fft_frame = np.fft.rfft(self.signal_frame_pp1)
+                #fft_frame = self.spectrum
+                # fft_frame = np.fft.rfft(self.signal_to_ayse)  # computes and plots the fft signal
+                # print len(fft_frame)
+                # print len(self.spectrum)
+                fft_frame = self.spectrum  # 1025 entries
 
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " some thing about scaling"
@@ -379,8 +395,8 @@ class LiveFFTWidget(QtGui.QWidget):
                 # " placeholder"  # 0.8s wdf
                 # self.prev_time = time.time()
 
-                new_pitch = 8.0  # to make this information meaningful
-                precise_pitch = 10.0
+                new_pitch = self.ffreq
+                precise_pitch = self.ffreq
 
                 # print str(time.time() - self.start_time) + "  " + str(time.time() - self.prev_time) + \
                 # " set pitch on graph"
